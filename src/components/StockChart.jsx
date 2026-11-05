@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import Plot from 'react-plotly.js';
 
 const StockChart = ({ data, predictions, symbol, company, riskLevels }) => {
@@ -9,295 +9,332 @@ const StockChart = ({ data, predictions, symbol, company, riskLevels }) => {
     const [showBB, setShowBB] = useState(false);
     const [showConfidence, setShowConfidence] = useState(true);
     const [showRiskLevels, setShowRiskLevels] = useState(true);
+    const [showFibonacci, setShowFibonacci] = useState(false);
 
-    const dates = data.map(d => d.Date);
-    const close = data.map(d => d.Close);
-    const sma20 = data.map(d => d.SMA_20);
-    const sma50 = data.map(d => d.SMA_50);
-    const ema9 = data.map(d => d.EMA_9);
-    const ema21 = data.map(d => d.EMA_21);
-    const upperBB = data.map(d => d.Upper_Band);
-    const lowerBB = data.map(d => d.Lower_Band);
+    const { dates, close, sma20, sma50, ema9, ema21, upperBB, lowerBB } = useMemo(() => {
+        return {
+            dates: data.map(d => d.Date),
+            close: data.map(d => d.Close),
+            sma20: data.map(d => d.SMA_20),
+            sma50: data.map(d => d.SMA_50),
+            ema9: data.map(d => d.EMA_9),
+            ema21: data.map(d => d.EMA_21),
+            upperBB: data.map(d => d.Upper_Band),
+            lowerBB: data.map(d => d.Lower_Band)
+        };
+    }, [data]);
 
-    const traces = [
-        {
-            x: dates,
-            y: close,
-            type: 'scatter',
-            mode: 'lines',
-            name: 'Close Price',
-            line: { color: '#3b82f6', width: 2.5 }
-        }
-    ];
-
-    // Simple Moving Averages
-    if (showSMA) {
-        if (sma20 && sma20.some(v => v !== undefined)) {
-            traces.push({
+    const traces = useMemo(() => {
+        const trs = [
+            {
                 x: dates,
-                y: sma20,
+                y: close,
                 type: 'scatter',
                 mode: 'lines',
-                name: 'SMA 20',
-                line: { color: '#10b981', width: 1.5 },
-                opacity: 0.8
-            });
+                name: 'Close Price',
+                line: { color: '#3b82f6', width: 2.5 }
+            }
+        ];
+
+        // Simple Moving Averages
+        if (showSMA) {
+            if (sma20 && sma20.some(v => v !== undefined)) {
+                trs.push({
+                    x: dates,
+                    y: sma20,
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: 'SMA 20',
+                    line: { color: '#10b981', width: 1.5 },
+                    opacity: 0.8
+                });
+            }
+            if (sma50 && sma50.some(v => v !== undefined)) {
+                trs.push({
+                    x: dates,
+                    y: sma50,
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: 'SMA 50',
+                    line: { color: '#f59e0b', width: 1.5 },
+                    opacity: 0.8
+                });
+            }
         }
-        if (sma50 && sma50.some(v => v !== undefined)) {
-            traces.push({
+
+        // Exponential Moving Averages
+        if (showEMA) {
+            if (ema9 && ema9.some(v => v !== undefined)) {
+                trs.push({
+                    x: dates,
+                    y: ema9,
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: 'EMA 9',
+                    line: { color: '#ec4899', width: 1.5, dash: 'dot' },
+                    opacity: 0.8
+                });
+            }
+            if (ema21 && ema21.some(v => v !== undefined)) {
+                trs.push({
+                    x: dates,
+                    y: ema21,
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: 'EMA 21',
+                    line: { color: '#8b5cf6', width: 1.5, dash: 'dot' },
+                    opacity: 0.8
+                });
+            }
+        }
+
+        // Bollinger Bands
+        if (showBB && upperBB && lowerBB && upperBB.some(v => v !== undefined)) {
+            trs.push({
                 x: dates,
-                y: sma50,
+                y: upperBB,
                 type: 'scatter',
                 mode: 'lines',
-                name: 'SMA 50',
-                line: { color: '#f59e0b', width: 1.5 },
-                opacity: 0.8
-            });
-        }
-    }
-
-    // Exponential Moving Averages
-    if (showEMA) {
-        if (ema9 && ema9.some(v => v !== undefined)) {
-            traces.push({
-                x: dates,
-                y: ema9,
-                type: 'scatter',
-                mode: 'lines',
-                name: 'EMA 9',
-                line: { color: '#ec4899', width: 1.5, dash: 'dot' },
-                opacity: 0.8
-            });
-        }
-        if (ema21 && ema21.some(v => v !== undefined)) {
-            traces.push({
-                x: dates,
-                y: ema21,
-                type: 'scatter',
-                mode: 'lines',
-                name: 'EMA 21',
-                line: { color: '#8b5cf6', width: 1.5, dash: 'dot' },
-                opacity: 0.8
-            });
-        }
-    }
-
-    // Bollinger Bands
-    if (showBB && upperBB && lowerBB && upperBB.some(v => v !== undefined)) {
-        traces.push({
-            x: dates,
-            y: upperBB,
-            type: 'scatter',
-            mode: 'lines',
-            name: 'Upper BB',
-            line: { color: 'rgba(156, 163, 175, 0.4)', width: 1 },
-            showlegend: false
-        });
-        traces.push({
-            x: dates,
-            y: lowerBB,
-            type: 'scatter',
-            mode: 'lines',
-            name: 'Bollinger Bands',
-            fill: 'tonexty',
-            fillcolor: 'rgba(156, 163, 175, 0.08)',
-            line: { color: 'rgba(156, 163, 175, 0.4)', width: 1 },
-            opacity: 0.5
-        });
-    }
-
-    // Predictions & Probabilistic Confidence Bands
-    if (predictions && predictions.length > 0) {
-        const predDates = predictions.map(p => p.date);
-        const predPrices = predictions.map(p => p.price);
-        const upper95 = predictions.map(p => p.upper_95 || p.price * 1.03);
-        const lower95 = predictions.map(p => p.lower_95 || p.price * 0.97);
-
-        const lastDataDate = dates[dates.length - 1];
-        const lastDataPrice = close[close.length - 1];
-
-        // Connection line
-        traces.push({
-            x: [lastDataDate, predDates[0]],
-            y: [lastDataPrice, predPrices[0]],
-            mode: 'lines',
-            line: { color: '#ef4444', dash: 'dot', width: 2 },
-            showlegend: false,
-            hoverinfo: 'skip'
-        });
-
-        // Shaded Confidence Corridor (95% Probability Bounds)
-        if (showConfidence && upper95.length > 0 && lower95.length > 0) {
-            const corridorX = [lastDataDate, ...predDates];
-            const corridorUpper = [lastDataPrice, ...upper95];
-            const corridorLower = [lastDataPrice, ...lower95];
-
-            traces.push({
-                x: corridorX,
-                y: corridorUpper,
-                type: 'scatter',
-                mode: 'lines',
-                name: '95% Confidence Upper',
-                line: { color: 'rgba(239, 68, 68, 0.2)', width: 1 },
+                name: 'Upper BB',
+                line: { color: 'rgba(156, 163, 175, 0.4)', width: 1 },
                 showlegend: false
             });
-            traces.push({
-                x: corridorX,
-                y: corridorLower,
+            trs.push({
+                x: dates,
+                y: lowerBB,
                 type: 'scatter',
                 mode: 'lines',
-                name: '95% Confidence Band',
+                name: 'Bollinger Bands',
+                line: { color: 'rgba(156, 163, 175, 0.4)', width: 1 },
                 fill: 'tonexty',
-                fillcolor: 'rgba(239, 68, 68, 0.12)',
-                line: { color: 'rgba(239, 68, 68, 0.2)', width: 1 },
-                opacity: 0.5
+                fillcolor: 'rgba(156, 163, 175, 0.05)'
             });
         }
 
-        // Prediction Trend Line
-        traces.push({
-            x: predDates,
-            y: predPrices,
-            type: 'scatter',
-            mode: 'lines+markers',
-            name: 'AI Forecast',
-            line: { color: '#ef4444', dash: 'dash', width: 2.5 },
-            marker: { size: 6, color: '#ef4444' }
-        });
-    }
+        // AI Predictions and Dynamic Confidence Corridors
+        if (predictions && predictions.length > 0) {
+            const predDates = predictions.map(p => p.date);
+            const predPrices = predictions.map(p => p.price);
 
-    // Risk Management Horizontal Targets (Stop Loss / Take Profits)
-    const shapes = [];
-    const annotations = [];
+            // Connect last historical point to first prediction
+            const lastDate = dates[dates.length - 1];
+            const lastClose = close[close.length - 1];
 
-    if (showRiskLevels && riskLevels) {
-        const lastDate = dates[dates.length - 1];
-        const firstDate = dates[Math.max(0, dates.length - 30)];
+            const forecastDates = [lastDate, ...predDates];
+            const forecastPrices = [lastClose, ...predPrices];
 
-        if (riskLevels.stop_loss) {
-            shapes.push({
-                type: 'line',
-                x0: firstDate,
-                x1: lastDate,
-                y0: riskLevels.stop_loss,
-                y1: riskLevels.stop_loss,
-                line: { color: '#ef4444', width: 1.5, dash: 'dash' }
+            if (showConfidence && predictions[0].upper_95 !== undefined) {
+                const upper95 = [lastClose, ...predictions.map(p => p.upper_95)];
+                const lower95 = [lastClose, ...predictions.map(p => p.lower_95)];
+
+                trs.push({
+                    x: forecastDates,
+                    y: upper95,
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: '95% Upper Bound',
+                    line: { color: 'rgba(139, 92, 246, 0.2)', width: 0.5 },
+                    showlegend: false
+                });
+
+                trs.push({
+                    x: forecastDates,
+                    y: lower95,
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: '95% Confidence Corridor',
+                    fill: 'tonexty',
+                    fillcolor: 'rgba(139, 92, 246, 0.12)',
+                    line: { color: 'rgba(139, 92, 246, 0.2)', width: 0.5 }
+                });
+            }
+
+            trs.push({
+                x: forecastDates,
+                y: forecastPrices,
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: 'AI Forecast',
+                line: { color: '#a855f7', width: 2.5, dash: 'dash' },
+                marker: { size: 6, color: '#c084fc' }
             });
-            annotations.push({
-                x: lastDate,
-                y: riskLevels.stop_loss,
-                text: `SL: $${riskLevels.stop_loss}`,
-                showarrow: false,
-                font: { color: '#ef4444', size: 10 },
-                xanchor: 'left'
+        }
+
+        // ATR Risk Management Levels (Stop Loss & Take Profit)
+        if (showRiskLevels && riskLevels) {
+            const lastHistoricalDate = dates[dates.length - 1];
+            const forecastLastDate = predictions && predictions.length > 0
+                ? predictions[predictions.length - 1].date
+                : dates[dates.length - 1];
+
+            const riskDates = [lastHistoricalDate, forecastLastDate];
+
+            // Stop Loss
+            trs.push({
+                x: riskDates,
+                y: [riskLevels.stop_loss, riskLevels.stop_loss],
+                type: 'scatter',
+                mode: 'lines',
+                name: `Stop Loss ($${riskLevels.stop_loss})`,
+                line: { color: '#ef4444', width: 2, dash: 'dash' }
+            });
+
+            // Take Profit 1
+            trs.push({
+                x: riskDates,
+                y: [riskLevels.take_profit_1, riskLevels.take_profit_1],
+                type: 'scatter',
+                mode: 'lines',
+                name: `Take Profit 1 ($${riskLevels.take_profit_1})`,
+                line: { color: '#10b981', width: 2, dash: 'dot' }
+            });
+
+            // Take Profit 2
+            trs.push({
+                x: riskDates,
+                y: [riskLevels.take_profit_2, riskLevels.take_profit_2],
+                type: 'scatter',
+                mode: 'lines',
+                name: `Take Profit 2 ($${riskLevels.take_profit_2})`,
+                line: { color: '#059669', width: 1.5, dash: 'dot' }
             });
         }
 
-        if (riskLevels.take_profit_2) {
-            shapes.push({
-                type: 'line',
-                x0: firstDate,
-                x1: lastDate,
-                y0: riskLevels.take_profit_2,
-                y1: riskLevels.take_profit_2,
-                line: { color: '#10b981', width: 1.5, dash: 'dash' }
+        // Fibonacci Retracements
+        if (showFibonacci && riskLevels?.fibonacci) {
+            const fib = riskLevels.fibonacci;
+            const xSpan = [dates[Math.max(0, dates.length - 30)], dates[dates.length - 1]];
+
+            trs.push({
+                x: xSpan,
+                y: [fib.fib_236, fib.fib_236],
+                type: 'scatter',
+                mode: 'lines',
+                name: `Fib 23.6% ($${fib.fib_236})`,
+                line: { color: '#eab308', width: 1, dash: 'dot' }
             });
-            annotations.push({
-                x: lastDate,
-                y: riskLevels.take_profit_2,
-                text: `TP2: $${riskLevels.take_profit_2}`,
-                showarrow: false,
-                font: { color: '#10b981', size: 10 },
-                xanchor: 'left'
+            trs.push({
+                x: xSpan,
+                y: [fib.fib_500, fib.fib_500],
+                type: 'scatter',
+                mode: 'lines',
+                name: `Fib 50.0% ($${fib.fib_500})`,
+                line: { color: '#f97316', width: 1, dash: 'dot' }
+            });
+            trs.push({
+                x: xSpan,
+                y: [fib.fib_618, fib.fib_618],
+                type: 'scatter',
+                mode: 'lines',
+                name: `Fib 61.8% ($${fib.fib_618})`,
+                line: { color: '#ef4444', width: 1, dash: 'dot' }
             });
         }
-    }
 
-    const chartTitle = company && company !== symbol ? `${symbol} - ${company}` : symbol;
+        return trs;
+    }, [dates, close, sma20, sma50, ema9, ema21, upperBB, lowerBB, showSMA, showEMA, showBB, showConfidence, showRiskLevels, showFibonacci, predictions, riskLevels]);
+
+    const layout = useMemo(() => ({
+        title: {
+            text: `${company || symbol} Price Analytics`,
+            font: { color: '#f3f4f6', size: 18 }
+        },
+        paper_bgcolor: 'transparent',
+        plot_bgcolor: 'transparent',
+        xaxis: {
+            gridcolor: 'rgba(255, 255, 255, 0.05)',
+            color: '#9ca3af',
+            rangeslider: { visible: false },
+            type: 'category'
+        },
+        yaxis: {
+            gridcolor: 'rgba(255, 255, 255, 0.05)',
+            color: '#9ca3af',
+            side: 'right',
+            tickprefix: '$'
+        },
+        margin: { l: 20, r: 60, t: 40, b: 40 },
+        autosize: true,
+        showlegend: true,
+        legend: {
+            orientation: 'h',
+            y: -0.15,
+            font: { color: '#9ca3af', size: 11 }
+        },
+        hovermode: 'x unified'
+    }), [company, symbol]);
 
     return (
-        <div className="card" style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
-            {/* Chart Toolbar Controls */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', paddingBottom: '0.4rem', borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
-                <span style={{ fontWeight: '700', fontSize: '1rem', color: 'var(--text-primary)' }}>
-                    {chartTitle}
-                </span>
-
-                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+        <div className="card" style={{ padding: '1rem', marginTop: '1rem' }}>
+            {/* Interactive Layer Toggles */}
+            <div style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: '0.5rem',
+                marginBottom: '0.75rem',
+                paddingBottom: '0.75rem',
+                borderBottom: '1px solid rgba(255, 255, 255, 0.05)'
+            }}>
+                <button
+                    className={`btn-pill ${showSMA ? 'active-green' : ''}`}
+                    onClick={() => setShowSMA(!showSMA)}
+                >
+                    SMA (20/50)
+                </button>
+                <button
+                    className={`btn-pill ${showEMA ? 'active-purple' : ''}`}
+                    onClick={() => setShowEMA(!showEMA)}
+                >
+                    EMA (9/21)
+                </button>
+                <button
+                    className={`btn-pill ${showBB ? 'active-blue' : ''}`}
+                    onClick={() => setShowBB(!showBB)}
+                >
+                    Bollinger Bands
+                </button>
+                {predictions && predictions.length > 0 && (
                     <button
-                        onClick={() => setShowSMA(!showSMA)}
-                        className={`btn-pill ${showSMA ? 'active-blue' : ''}`}
-                        title="Simple Moving Averages (20 / 50)"
+                        className={`btn-pill ${showConfidence ? 'active-purple' : ''}`}
+                        onClick={() => setShowConfidence(!showConfidence)}
                     >
-                        SMA (20/50)
+                        95% Confidence Band
                     </button>
+                )}
+                {riskLevels && (
                     <button
-                        onClick={() => setShowEMA(!showEMA)}
-                        className={`btn-pill ${showEMA ? 'active-purple' : ''}`}
-                        title="Exponential Moving Averages (9 / 21)"
+                        className={`btn-pill ${showRiskLevels ? 'active-teal' : ''}`}
+                        onClick={() => setShowRiskLevels(!showRiskLevels)}
                     >
-                        EMA (9/21)
+                        ATR Risk Levels
                     </button>
+                )}
+                {riskLevels?.fibonacci && (
                     <button
-                        onClick={() => setShowBB(!showBB)}
-                        className={`btn-pill ${showBB ? 'active-teal' : ''}`}
-                        title="Bollinger Bands"
+                        className={`btn-pill ${showFibonacci ? 'active-blue' : ''}`}
+                        onClick={() => setShowFibonacci(!showFibonacci)}
                     >
-                        Bollinger Bands
+                        Fibonacci Retracements
                     </button>
-                    {predictions && (
-                        <button
-                            onClick={() => setShowConfidence(!showConfidence)}
-                            className={`btn-pill ${showConfidence ? 'active-red' : ''}`}
-                            title="95% Forecast Confidence Corridor"
-                        >
-                            Confidence Corridor
-                        </button>
-                    )}
-                    {riskLevels && (
-                        <button
-                            onClick={() => setShowRiskLevels(!showRiskLevels)}
-                            className={`btn-pill ${showRiskLevels ? 'active-green' : ''}`}
-                            title="Stop Loss and Take Profit lines"
-                        >
-                            Risk Levels
-                        </button>
-                    )}
-                </div>
+                )}
             </div>
 
-            {/* Plotly Canvas */}
-            <div style={{ height: '480px', width: '100%' }}>
+            <div style={{ width: '100%', height: '520px' }}>
                 <Plot
                     data={traces}
-                    layout={{
-                        autosize: true,
-                        paper_bgcolor: 'rgba(0,0,0,0)',
-                        plot_bgcolor: 'rgba(0,0,0,0)',
-                        font: { color: '#f3f4f6', family: 'Inter, sans-serif' },
-                        xaxis: {
-                            gridcolor: '#374151',
-                            showgrid: true,
-                            zerolinecolor: '#374151'
-                        },
-                        yaxis: {
-                            gridcolor: '#374151',
-                            showgrid: true,
-                            zerolinecolor: '#374151'
-                        },
-                        margin: { t: 20, r: 40, l: 50, b: 40 },
-                        legend: { orientation: 'h', y: 1.12, x: 0.5, xanchor: 'center' },
-                        hovermode: 'x unified',
-                        shapes: shapes,
-                        annotations: annotations
-                    }}
-                    config={{ responsive: true, displayModeBar: false }}
-                    style={{ width: '100%', height: '100%' }}
+                    layout={layout}
                     useResizeHandler={true}
+                    style={{ width: '100%', height: '100%' }}
+                    config={{
+                        responsive: true,
+                        displayModeBar: true,
+                        displaylogo: false,
+                        modeBarButtonsToRemove: ['lasso2d', 'select2d']
+                    }}
                 />
             </div>
         </div>
     );
 };
 
-export default StockChart;
+export default React.memo(StockChart);

@@ -1,4 +1,29 @@
-node_modules
+# Dependencies
+node_modules/
 venv/
+env/
+.venv/
+
+# Production build artifacts
+dist/
+build/
+
+# Python bytecode and cache
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.pkl
+*.joblib
+.pytest_cache/
+
+# Environment and IDE
+.env
+.env.local
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
