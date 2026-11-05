@@ -412,10 +412,10 @@ def calculate_backtest_metrics(df, model_type='linear'):
 def calculate_risk_levels(current_price, atr, df=None):
     """
     Computes dynamic ATR-driven and Fibonacci-enhanced Risk Management levels:
-    - Stop Loss (SL): Entry - 1.5 * ATR (or recent swing support)
-    - Take Profit 1 (TP1): Entry + 1.5 * ATR (1:1 Risk/Reward)
-    - Take Profit 2 (TP2): Entry + 3.0 * ATR (1:2 Risk/Reward)
-    - Take Profit 3 (TP3): Entry + 4.5 * ATR (1:3 Risk/Reward)
+    - Stop Loss (SL): Entry - 1.5 * ATR (1R Risk Unit)
+    - Take Profit 1 (TP1): Entry + 3.0 * ATR (1:2 Risk/Reward Ratio)
+    - Take Profit 2 (TP2): Entry + 4.5 * ATR (1:3 Risk/Reward Ratio)
+    - Take Profit 3 (TP3): Entry + 6.0 * ATR (1:4 Risk/Reward Ratio)
     - Fibonacci Retracements (if historical df provided)
     """
     if not current_price or current_price <= 0:
@@ -424,22 +424,27 @@ def calculate_risk_levels(current_price, atr, df=None):
     if not atr or pd.isna(atr) or atr <= 0:
         atr = current_price * 0.01
 
-    sl = current_price - (1.5 * atr)
-    tp1 = current_price + (1.5 * atr)
-    tp2 = current_price + (3.0 * atr)
-    tp3 = current_price + (4.5 * atr)
     risk_per_share = 1.5 * atr
+    sl = current_price - risk_per_share
+    tp1 = current_price + (2.0 * risk_per_share)  # 1:2 Risk/Reward
+    tp2 = current_price + (3.0 * risk_per_share)  # 1:3 Risk/Reward
+    tp3 = current_price + (4.0 * risk_per_share)  # 1:4 Risk/Reward
 
     fib_levels = calculate_fibonacci_levels(df) if df is not None and not df.empty else {}
 
     return {
         "current_price": round(float(current_price), 4),
         "atr": round(float(atr), 4),
-        "stop_loss": round(float(sl), 4),
-        "take_profit_1": round(float(tp1), 4),
-        "take_profit_2": round(float(tp2), 4),
-        "take_profit_3": round(float(tp3), 4),
         "risk_per_share": round(float(risk_per_share), 4),
+        "stop_loss": round(float(sl), 4),
+        "take_profit_1": round(float(tp1), 4),      # 1:2 Risk/Reward Target
+        "take_profit_2": round(float(tp2), 4),      # 1:3 Risk/Reward Target
+        "take_profit_3": round(float(tp3), 4),      # 1:4 Risk/Reward Target
+        "target_1_2": round(float(tp1), 4),
+        "target_1_3": round(float(tp2), 4),
+        "risk_reward_ratio_1": "1:2",
+        "risk_reward_ratio_2": "1:3",
+        "primary_rr": "1:2 or 1:3",
         "fibonacci": fib_levels
     }
 

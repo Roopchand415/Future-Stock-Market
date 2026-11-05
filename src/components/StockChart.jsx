@@ -185,7 +185,7 @@ const StockChart = ({ data, predictions, symbol, company, riskLevels }) => {
                 y: [riskLevels.take_profit_1, riskLevels.take_profit_1],
                 type: 'scatter',
                 mode: 'lines',
-                name: `Take Profit 1 ($${riskLevels.take_profit_1})`,
+                name: `TP1 — 1:2 R/R ($${riskLevels.take_profit_1})`,
                 line: { color: '#10b981', width: 2, dash: 'dot' }
             });
 
@@ -195,7 +195,7 @@ const StockChart = ({ data, predictions, symbol, company, riskLevels }) => {
                 y: [riskLevels.take_profit_2, riskLevels.take_profit_2],
                 type: 'scatter',
                 mode: 'lines',
-                name: `Take Profit 2 ($${riskLevels.take_profit_2})`,
+                name: `TP2 — 1:3 R/R ($${riskLevels.take_profit_2})`,
                 line: { color: '#059669', width: 1.5, dash: 'dot' }
             });
         }

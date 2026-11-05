@@ -424,9 +424,17 @@ function App() {
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Max Risk ($)</div>
                   <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--danger)' }}>${maxRiskAmount.toFixed(2)}</div>
                 </div>
-                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '8px' }}>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Stop Loss (1.5x ATR)</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>${(activeRiskLevels?.stop_loss || (livePrice - stopLossDistance)).toFixed(2)}</div>
+                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '8px', borderLeft: '3px solid var(--danger)' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Stop Loss (1.5× ATR)</div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--danger)' }}>${(activeRiskLevels?.stop_loss || (livePrice - stopLossDistance)).toFixed(2)}</div>
+                </div>
+                <div style={{ background: 'rgba(16,185,129,0.1)', padding: '0.75rem', borderRadius: '8px', borderLeft: '3px solid #10b981' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Take Profit 1 <span style={{ background: '#10b981', color: '#000', borderRadius: '4px', padding: '0 5px', fontSize: '0.7rem', fontWeight: 'bold' }}>1:2 R/R</span></div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#10b981' }}>${(activeRiskLevels?.take_profit_1 || (livePrice + 2 * stopLossDistance)).toFixed(2)}</div>
+                </div>
+                <div style={{ background: 'rgba(5,150,105,0.1)', padding: '0.75rem', borderRadius: '8px', borderLeft: '3px solid #059669' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Take Profit 2 <span style={{ background: '#059669', color: '#fff', borderRadius: '4px', padding: '0 5px', fontSize: '0.7rem', fontWeight: 'bold' }}>1:3 R/R</span></div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#059669' }}>${(activeRiskLevels?.take_profit_2 || (livePrice + 3 * stopLossDistance)).toFixed(2)}</div>
                 </div>
                 <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '8px' }}>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Suggested Position Size</div>
