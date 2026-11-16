@@ -109,9 +109,15 @@ def train_gru_model(df, symbol=None, interval=None, seq_len=30):
             return cached
 
     df_feat = calculate_indicators(df, drop_warmup=True)
-    if df_feat is None or len(df_feat) < seq_len + 15:
+    if df_feat is None or len(df_feat) < 25:
+        df_feat = calculate_indicators(df, drop_warmup=False)
+
+    if df_feat is None or len(df_feat) < 20:
         logger.warning(f"GRU: insufficient data ({len(df_feat) if df_feat is not None else 0} rows)")
         return {'is_fallback': True}
+
+    # Adapt seq_len dynamically to available data depth
+    effective_seq_len = min(seq_len, max(5, len(df_feat) // 4))
 
     df_feat['Target_Return'] = df_feat['Return_1d'].shift(-1)
     df_clean = df_feat.dropna(subset=FEATURE_COLUMNS + ['Target_Return']).copy()
@@ -125,11 +131,11 @@ def train_gru_model(df, symbol=None, interval=None, seq_len=30):
     # Build rolling windows: (n_windows, seq_len, n_features)
     n_features = len(FEATURE_COLUMNS)
     sequences, targets = [], []
-    for i in range(seq_len, len(X_scaled)):
-        sequences.append(X_scaled[i - seq_len:i])
+    for i in range(effective_seq_len, len(X_scaled)):
+        sequences.append(X_scaled[i - effective_seq_len:i])
         targets.append(y_raw[i])
 
-    if len(sequences) < 20:
+    if len(sequences) < 10:
         return {'is_fallback': True}
 
     X_seq = np.array(sequences, dtype=np.float32)
@@ -192,10 +198,10 @@ def train_gru_model(df, symbol=None, interval=None, seq_len=30):
         'gru': model,
         'scaler': scaler,
         'features': FEATURE_COLUMNS,
-        'seq_len': seq_len,
+        'seq_len': effective_seq_len,
         'return_std': float(np.std(y_raw)),
         'val_dir_accuracy': round(gru_dir_acc * 100, 1),
-        'last_sequence': X_scaled[-seq_len:],   # for fast inference
+        'last_sequence': X_scaled[-effective_seq_len:],   # for fast inference
         'df': df,
         'is_fallback': False,
         'model_type': 'GRU'

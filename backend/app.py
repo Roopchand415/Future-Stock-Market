@@ -557,36 +557,56 @@ def predict_gru():
     """
     Train and run the real GRU deep learning model for a symbol.
     Returns 7-day GRU forecast alongside model validation accuracy.
+    Uses multi-source data pipeline (Binance -> CoinGecko -> Yahoo Finance).
     """
     from services.prediction import train_gru_model, predict_future_gru
 
     symbol = request.args.get('symbol', 'AAPL').upper()
     interval = request.args.get('interval', '1d')
+    if interval not in ('1m', '5m', '15m', '1h', '1d'):
+        interval = '1d'
 
     try:
-        # Fetch historical data (reuse existing logic)
         is_crypto = is_crypto_symbol(symbol)
-        if is_crypto:
-            df = fetch_crypto_historical_data(symbol, days=365 * 3)
-        else:
-            period = '3y'
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period=period, interval=interval)
-            if hist.empty:
-                return jsonify({"error": f"No data for {symbol}"}), 404
-            hist = hist.reset_index()
-            hist.rename(columns={'Datetime': 'Date', 'index': 'Date'}, inplace=True)
-            if 'Date' not in hist.columns and hist.index.name == 'Date':
-                hist = hist.reset_index()
-            df = hist
+        period = YF_PERIODS.get(interval, '3y')
+        df = None
 
-        if df is None or len(df) < 60:
-            return jsonify({"error": "Insufficient data for GRU (need 60+ bars)"}), 400
+        if symbol in ('XAUUSD', 'GOLD', 'GC=F'):
+            df, _, _ = fetch_gold_market_data(interval=interval, period=period)
+        elif is_crypto:
+            df = get_binance_klines(symbol, interval=interval, limit=500)
+            if df is None or df.empty:
+                df = fetch_crypto_historical_data(symbol, days=365)
+            if df is None or df.empty:
+                clean_sym = symbol.replace('-USD', '').replace('USDT', '')
+                try:
+                    stock = yf.Ticker(f"{clean_sym}-USD")
+                    df = stock.history(period=period, interval=interval)
+                    if not df.empty:
+                        df.reset_index(inplace=True)
+                except Exception:
+                    pass
+        else:
+            stock = yf.Ticker(symbol)
+            try:
+                df = stock.history(period=period, interval=interval)
+                if not df.empty:
+                    df.reset_index(inplace=True)
+            except Exception as e:
+                print(f"Error fetching data for GRU: {e}")
+
+        if df is None or df.empty:
+            return jsonify({"error": f"Insufficient historical data for '{symbol}'"}), 404
+
+        df = process_dates(df, interval=interval)
+
+        if len(df) < 30:
+            return jsonify({"error": f"Insufficient data for GRU (received {len(df)} bars, need 30+)"}), 400
 
         gru_dict = train_gru_model(df, symbol=symbol, interval=interval)
 
         if gru_dict.get('is_fallback'):
-            return jsonify({"error": "GRU training failed — insufficient data or PyTorch unavailable"}), 400
+            return jsonify({"error": "GRU training fallback triggered (PyTorch unavailable or data too short)"}), 400
 
         preds = predict_future_gru(gru_dict, days=7)
         last_close = float(df['Close'].iloc[-1])
