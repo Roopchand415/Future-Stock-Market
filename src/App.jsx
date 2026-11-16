@@ -632,7 +632,7 @@ function App() {
               🔬 FYP-2 Evaluation & Validation Methodology
             </h4>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
-              Evaluation metrics utilize <strong>TimeSeriesSplit walk-forward validation</strong> with expanding historical windows. Model performance is strictly benchmarked out-of-sample against naive persistence (Random Walk $\hat{y}_{t+1}=y_t$) and majority class drift baselines to eliminate data leakage and survivorship bias.
+              Evaluation metrics utilize <strong>TimeSeriesSplit walk-forward validation</strong> with expanding historical windows. Model performance is strictly benchmarked out-of-sample against naive persistence (Random Walk: Tomorrow = Today) and majority class drift baselines to eliminate data leakage and survivorship bias.
             </div>
           </div>
         </>
