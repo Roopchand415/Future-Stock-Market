@@ -333,7 +333,8 @@ def get_stock_data(symbol):
 
         signals = calculate_trading_signals(hist, interval=interval, sentiment_data=sentiment_data)
         atr_val = float(latest['ATR']) if 'ATR' in latest and not pd.isna(latest['ATR']) else float(latest['Close']) * 0.01
-        risk_levels = calculate_risk_levels(float(stats['close']), atr_val, df=hist)
+        sig_dir = signals.get('direction', 'BUY') if signals else 'BUY'
+        risk_levels = signals.get('risk_levels') if signals else calculate_risk_levels(float(stats['close']), atr_val, df=hist, direction=sig_dir)
 
         payload = {
             "symbol": symbol,
@@ -529,8 +530,18 @@ def predict_stock(symbol):
         # Authentic Walk-Forward Backtest (No Data Leakage, No Fabricated 72.5%)
         backtest_metrics = calculate_backtest_metrics(hist, model_type=model_type)
 
-        atr_val = float(hist['ATR'].iloc[-1]) if 'ATR' in hist.columns and not pd.isna(hist['ATR'].iloc[-1]) else float(hist['Close'].iloc[-1]) * 0.01
-        risk_levels = calculate_risk_levels(float(hist['Close'].iloc[-1]), atr_val, df=hist)
+        last_close_val = float(hist['Close'].iloc[-1])
+        final_predicted_p = float(predictions[-1]["price"]) if predictions else last_close_val
+        pred_pct_change = (final_predicted_p - last_close_val) / last_close_val if last_close_val > 0 else 0
+        if pred_pct_change >= 0.005:
+            forecast_dir = 'BUY'
+        elif pred_pct_change <= -0.005:
+            forecast_dir = 'SELL'
+        else:
+            forecast_dir = 'NEUTRAL'
+
+        atr_val = float(hist['ATR'].iloc[-1]) if 'ATR' in hist.columns and not pd.isna(hist['ATR'].iloc[-1]) else last_close_val * 0.01
+        risk_levels = calculate_risk_levels(last_close_val, atr_val, df=hist, direction=forecast_dir)
 
         return jsonify({
             "symbol": symbol,

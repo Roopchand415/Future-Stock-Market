@@ -695,14 +695,25 @@ def calculate_backtest_metrics(df, model_type='linear'):
 # 4. Dynamic Risk Management & Trading Signals
 # =====================================================================
 
-def calculate_risk_levels(current_price, atr, df=None):
+def calculate_risk_levels(current_price, atr, df=None, direction='BUY'):
     """
-    Computes dynamic ATR-driven and Fibonacci-enhanced Risk Management levels:
-    - Stop Loss (SL): Entry - 1.5 * ATR (1R Risk Unit)
-    - Take Profit 1 (TP1): Entry + 3.0 * ATR (1:2 Risk/Reward Ratio)
-    - Take Profit 2 (TP2): Entry + 4.5 * ATR (1:3 Risk/Reward Ratio)
-    - Take Profit 3 (TP3): Entry + 6.0 * ATR (1:4 Risk/Reward Ratio)
-    - Fibonacci Retracements (if historical df provided)
+    Computes dynamic ATR-driven and Fibonacci-enhanced Risk Management levels
+    ALIGNED WITH TRADE DIRECTION (BUY / LONG vs SELL / SHORT vs NEUTRAL).
+
+    For BUY / LONG:
+      - Stop Loss (SL): Entry - 1.5 * ATR (BELOW entry)
+      - Take Profit 1 (TP1): Entry + 3.0 * ATR (ABOVE entry, 1:2 R/R)
+      - Take Profit 2 (TP2): Entry + 4.5 * ATR (ABOVE entry, 1:3 R/R)
+      - Take Profit 3 (TP3): Entry + 6.0 * ATR (ABOVE entry, 1:4 R/R)
+
+    For SELL / SHORT:
+      - Stop Loss (SL): Entry + 1.5 * ATR (ABOVE entry)
+      - Take Profit 1 (TP1): Entry - 3.0 * ATR (BELOW entry, 1:2 R/R)
+      - Take Profit 2 (TP2): Entry - 4.5 * ATR (BELOW entry, 1:3 R/R)
+      - Take Profit 3 (TP3): Entry - 6.0 * ATR (BELOW entry, 1:4 R/R)
+
+    For NEUTRAL:
+      - Marks is_neutral=True and provides breakout and breakdown triggers.
     """
     if not current_price or current_price <= 0:
         return None
@@ -711,14 +722,42 @@ def calculate_risk_levels(current_price, atr, df=None):
         atr = current_price * 0.01
 
     risk_per_share = 1.5 * atr
-    sl = current_price - risk_per_share
-    tp1 = current_price + (2.0 * risk_per_share)  # 1:2 Risk/Reward
-    tp2 = current_price + (3.0 * risk_per_share)  # 1:3 Risk/Reward
-    tp3 = current_price + (4.0 * risk_per_share)  # 1:4 Risk/Reward
+    norm_dir = direction.upper() if direction else 'BUY'
+
+    if 'SELL' in norm_dir or 'SHORT' in norm_dir:
+        # SHORT / SELL Trade Levels
+        trade_dir = 'SELL'
+        action = 'SHORT / SELL'
+        is_neutral = False
+        sl = current_price + risk_per_share
+        tp1 = max(0.0001, current_price - (2.0 * risk_per_share))
+        tp2 = max(0.0001, current_price - (3.0 * risk_per_share))
+        tp3 = max(0.0001, current_price - (4.0 * risk_per_share))
+    elif 'NEUTRAL' in norm_dir:
+        # NEUTRAL / Range-bound (Consolidation)
+        trade_dir = 'NEUTRAL'
+        action = 'NEUTRAL (Range-Bound)'
+        is_neutral = True
+        sl = max(0.0001, current_price - risk_per_share)
+        tp1 = current_price + (2.0 * risk_per_share)
+        tp2 = current_price + (3.0 * risk_per_share)
+        tp3 = current_price + (4.0 * risk_per_share)
+    else:
+        # LONG / BUY Trade Levels
+        trade_dir = 'BUY'
+        action = 'LONG / BUY'
+        is_neutral = False
+        sl = max(0.0001, current_price - risk_per_share)
+        tp1 = current_price + (2.0 * risk_per_share)
+        tp2 = current_price + (3.0 * risk_per_share)
+        tp3 = current_price + (4.0 * risk_per_share)
 
     fib_levels = calculate_fibonacci_levels(df) if df is not None and not df.empty else {}
 
     return {
+        "direction": trade_dir,
+        "action": action,
+        "is_neutral": is_neutral,
         "current_price": round(float(current_price), 4),
         "atr": round(float(atr), 4),
         "risk_per_share": round(float(risk_per_share), 4),
@@ -731,14 +770,28 @@ def calculate_risk_levels(current_price, atr, df=None):
         "risk_reward_ratio_1": "1:2",
         "risk_reward_ratio_2": "1:3",
         "primary_rr": "1:2 or 1:3",
-        "fibonacci": fib_levels
+        "fibonacci": fib_levels,
+        "neutral_breakout_buy": {
+            "trigger": round(float(current_price + atr), 4),
+            "stop_loss": round(float(current_price - 0.5 * atr), 4),
+            "take_profit_1": round(float(current_price + 3.0 * atr), 4)
+        },
+        "neutral_breakdown_sell": {
+            "trigger": round(float(max(0.0001, current_price - atr)), 4),
+            "stop_loss": round(float(current_price + 0.5 * atr), 4),
+            "take_profit_1": round(float(max(0.0001, current_price - 3.0 * atr)), 4)
+        }
     }
 
 
 def calculate_trading_signals(df, strategy="day_trading", interval="1d", sentiment_data=None):
     """
-    Generates standardized trading signals combining technical momentum,
-    trend indicators, and news sentiment score.
+    Generates balanced, multi-indicator trading signals:
+    - Trend: EMA (9 vs 21), SMA alignment
+    - Momentum: Wilder's RSI (30/50/70 thresholds)
+    - Trend Momentum: MACD Line vs Signal & Histogram
+    - Volatility & Bands: Bollinger Bands %B & mean reversion
+    - Sentiment: FinBERT/VADER calibrated score
     """
     if df is None or df.empty or len(df) < 20:
         return None
@@ -758,21 +811,34 @@ def calculate_trading_signals(df, strategy="day_trading", interval="1d", sentime
     latest = df_calc.iloc[-1]
     close = float(latest['Close'])
 
-    # 1. RSI Indicator
+    # 1. RSI Indicator (Multi-tier: Oversold / Bullish Momentum / Bearish Momentum / Overbought)
     rsi = float(latest['RSI']) if 'RSI' in df_calc.columns else 50.0
     if rsi < 30:
-        rsi_signal = "BUY"
+        rsi_signal = "STRONG BUY"
     elif rsi > 70:
+        rsi_signal = "STRONG SELL"
+    elif rsi >= 52:
+        rsi_signal = "BUY"
+    elif rsi <= 48:
         rsi_signal = "SELL"
     else:
         rsi_signal = "NEUTRAL"
 
-    # 2. Moving Average Alignment
+    # 2. Moving Average Alignment (EMA 9 vs 21 + Price vs SMA 50)
     ema9 = float(latest['EMA_9']) if 'EMA_9' in df_calc.columns else close
     ema21 = float(latest['EMA_21']) if 'EMA_21' in df_calc.columns else close
-    ma_signal = "BUY" if ema9 > ema21 else "SELL"
+    sma50 = float(latest['SMA_50']) if 'SMA_50' in df_calc.columns else close
 
-    # 3. MACD Crossover
+    if ema9 > ema21 and close >= sma50:
+        ma_signal = "STRONG BUY"
+    elif ema9 > ema21:
+        ma_signal = "BUY"
+    elif ema9 < ema21 and close < sma50:
+        ma_signal = "STRONG SELL"
+    else:
+        ma_signal = "SELL"
+
+    # 3. MACD Momentum
     macd_val = float(latest['MACD_Line']) if 'MACD_Line' in df_calc.columns else 0.0
     sig_val = float(latest['MACD_Signal']) if 'MACD_Signal' in df_calc.columns else 0.0
     prev_macd = float(df_calc['MACD_Line'].iloc[-2]) if len(df_calc) > 1 else macd_val
@@ -782,27 +848,35 @@ def calculate_trading_signals(df, strategy="day_trading", interval="1d", sentime
         macd_signal = "STRONG BUY"
     elif macd_val < sig_val and prev_macd >= prev_sig:
         macd_signal = "STRONG SELL"
-    elif macd_val > sig_val:
+    elif macd_val > sig_val and macd_val > 0:
         macd_signal = "BUY"
-    else:
+    elif macd_val < sig_val and macd_val < 0:
         macd_signal = "SELL"
+    else:
+        macd_signal = "NEUTRAL"
 
-    # 4. Bollinger Bands Reversion
+    # 4. Bollinger Bands (Trend Continuation vs Exhaustion)
     upper_band = float(latest['Upper_Band']) if 'Upper_Band' in df_calc.columns else close * 1.02
     lower_band = float(latest['Lower_Band']) if 'Lower_Band' in df_calc.columns else close * 0.98
+    mid_band = float(latest.get('SMA20_BB', (upper_band + lower_band) / 2))
+
     if close <= lower_band:
-        bb_signal = "STRONG BUY"
-    elif close >= upper_band:
-        bb_signal = "STRONG SELL"
+        bb_signal = "STRONG BUY"   # Oversold bounce
+    elif close >= upper_band and rsi > 70:
+        bb_signal = "STRONG SELL"  # Overbought exhaustion
+    elif close > mid_band and ema9 > ema21:
+        bb_signal = "BUY"          # Upper band trend continuation
+    elif close < mid_band and ema9 < ema21:
+        bb_signal = "SELL"         # Lower band trend continuation
     else:
         bb_signal = "NEUTRAL"
 
     # 5. News Sentiment Signal
-    if sentiment_score >= 0.30:
+    if sentiment_score >= 0.25:
         sentiment_signal = "STRONG BUY"
     elif sentiment_score >= 0.08:
         sentiment_signal = "BUY"
-    elif sentiment_score <= -0.30:
+    elif sentiment_score <= -0.25:
         sentiment_signal = "STRONG SELL"
     elif sentiment_score <= -0.08:
         sentiment_signal = "SELL"
@@ -817,13 +891,13 @@ def calculate_trading_signals(df, strategy="day_trading", interval="1d", sentime
         elif "STRONG SELL" in s: score -= 2
         elif "SELL" in s: score -= 1
 
-    if score >= 4:
+    if score >= 3:
         overall_signal = "STRONG BUY"
         confidence = "High"
     elif score >= 1:
         overall_signal = "BUY"
         confidence = "Medium"
-    elif score <= -4:
+    elif score <= -3:
         overall_signal = "STRONG SELL"
         confidence = "High"
     elif score <= -1:
@@ -834,12 +908,22 @@ def calculate_trading_signals(df, strategy="day_trading", interval="1d", sentime
         confidence = "Moderate"
 
     atr = float(latest['ATR']) if 'ATR' in df_calc.columns and not pd.isna(latest['ATR']) else close * 0.01
-    risk_levels = calculate_risk_levels(close, atr, df=df_calc)
+
+    # Map overall signal to trade direction
+    if 'BUY' in overall_signal:
+        trade_dir = 'BUY'
+    elif 'SELL' in overall_signal:
+        trade_dir = 'SELL'
+    else:
+        trade_dir = 'NEUTRAL'
+
+    risk_levels = calculate_risk_levels(close, atr, df=df_calc, direction=trade_dir)
 
     strategy_name = "Scalping" if interval in ('1m', '5m', '15m') else ("Intraday" if interval == '1h' else "Swing Trading")
 
     return {
         "signal": overall_signal,
+        "direction": trade_dir,
         "confidence": confidence,
         "score": score,
         "entry_price": round(close, 4),
@@ -849,10 +933,10 @@ def calculate_trading_signals(df, strategy="day_trading", interval="1d", sentime
         "strategy": strategy_name,
         "estimated_duration": "1 - 15 Minutes" if interval == "1m" else ("1 - 4 Hours" if interval == "1h" else "1 - 7 Days"),
         "analysis": [
-            {"name": "RSI (Wilder's 14)", "value": f"{rsi:.2f}", "signal": rsi_signal, "condition": "Momentum (<30 Oversold, >70 Overbought)"},
+            {"name": "RSI (Wilder's 14)", "value": f"{rsi:.2f}", "signal": rsi_signal, "condition": "Momentum (<30 Oversold, >70 Overbought, >52 Bullish)"},
             {"name": "MACD Crossover", "value": f"{macd_val:.3f}", "signal": macd_signal, "condition": "Trend Momentum"},
-            {"name": "EMA (9 vs 21)", "value": "Bullish" if ma_signal == "BUY" else "Bearish", "signal": ma_signal, "condition": "Exponential Trend"},
-            {"name": "Bollinger Bands", "value": f"{round(float(latest.get('BB_Width', 0)), 3)}", "signal": bb_signal, "condition": "Band Reversion"},
+            {"name": "EMA (9 vs 21)", "value": "Bullish" if "BUY" in ma_signal else "Bearish", "signal": ma_signal, "condition": "Exponential Trend"},
+            {"name": "Bollinger Bands", "value": f"{round(float(latest.get('BB_Width', 0)), 3)}", "signal": bb_signal, "condition": "Band Reversion & Expansion"},
             {"name": "News Sentiment", "value": f"{sentiment_score:+.2f}", "signal": sentiment_signal, "condition": sentiment_data.get('impact_direction', 'Neutral')}
         ]
     }

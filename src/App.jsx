@@ -21,6 +21,7 @@ function App() {
   const [selectedInterval, setSelectedInterval] = useState('1d')
   const [gruResult, setGruResult] = useState(null)
   const [loadingGru, setLoadingGru] = useState(false)
+  const [manualDirection, setManualDirection] = useState('auto') // 'auto' | 'BUY' | 'SELL'
 
   // Request cancellation ref
   const abortControllerRef = useRef(null)
@@ -194,10 +195,33 @@ function App() {
   const liveChange = currentStats && latest?.Close ? livePrice - latest.Close : (latest?.Close && previous?.Close ? latest.Close - previous.Close : 0)
   const liveChangePercent = currentStats && latest ? (liveChange / latest.Close) * 100 : (latest && previous ? ((latest.Close - previous.Close) / previous.Close) * 100 : 0)
 
-  // Dynamic Stop Loss from ATR
+  // Dynamic Stop Loss & Take Profit Aligned with Trade Direction
   const activeRiskLevels = predictionRiskLevels || data?.risk_levels
+  const autoDir = activeRiskLevels?.direction || (data?.signals?.signal?.includes('SELL') ? 'SELL' : (data?.signals?.signal?.includes('BUY') ? 'BUY' : 'NEUTRAL'))
+  const effectiveDirection = manualDirection === 'auto' ? autoDir : manualDirection
+
+  const isShortTrade = effectiveDirection === 'SELL'
+  const isNeutralTrade = effectiveDirection === 'NEUTRAL'
+
   const currentATR = activeRiskLevels?.atr || (livePrice * 0.015)
   const stopLossDistance = currentATR * 1.5
+
+  const defaultSL = isShortTrade ? (livePrice + stopLossDistance) : (livePrice - stopLossDistance)
+  const defaultTP1 = isShortTrade ? Math.max(0.01, livePrice - 2.0 * stopLossDistance) : (livePrice + 2.0 * stopLossDistance)
+  const defaultTP2 = isShortTrade ? Math.max(0.01, livePrice - 3.0 * stopLossDistance) : (livePrice + 3.0 * stopLossDistance)
+
+  const stopLossVal = (activeRiskLevels && activeRiskLevels.direction === effectiveDirection)
+    ? activeRiskLevels.stop_loss
+    : defaultSL
+
+  const tp1Val = (activeRiskLevels && activeRiskLevels.direction === effectiveDirection)
+    ? activeRiskLevels.take_profit_1
+    : defaultTP1
+
+  const tp2Val = (activeRiskLevels && activeRiskLevels.direction === effectiveDirection)
+    ? activeRiskLevels.take_profit_2
+    : defaultTP2
+
   const maxRiskAmount = (accountEquity * (riskPercent / 100.0))
   const suggestedUnits = stopLossDistance > 0 ? (maxRiskAmount / stopLossDistance) : 0
   const positionValue = suggestedUnits * livePrice
@@ -408,19 +432,83 @@ function App() {
 
             {/* Position Sizing & Risk Management Calculator */}
             <div className="card" style={{ gridColumn: '1 / -1', background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.7), rgba(15, 23, 42, 0.7))', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                   <ShieldAlert size={20} color="#3b82f6" />
                   <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Position Sizing & Risk Calculator</h3>
+                  
+                  {/* Trade Setup Bias Badge */}
+                  <span style={{
+                    fontSize: '0.75rem',
+                    fontWeight: '700',
+                    padding: '0.2rem 0.6rem',
+                    borderRadius: '6px',
+                    background: isShortTrade ? 'rgba(239, 68, 68, 0.2)' : (isNeutralTrade ? 'rgba(234, 179, 8, 0.2)' : 'rgba(16, 185, 129, 0.2)'),
+                    color: isShortTrade ? '#ef4444' : (isNeutralTrade ? '#eab308' : '#10b981'),
+                    border: `1px solid ${isShortTrade ? '#ef4444' : (isNeutralTrade ? '#eab308' : '#10b981')}`
+                  }}>
+                    {isShortTrade ? '🔴 SHORT (SELL) TRADE SETUP' : (isNeutralTrade ? '⚪ NEUTRAL SETUP (RANGE-BOUND)' : '🟢 LONG (BUY) TRADE SETUP')}
+                  </span>
                 </div>
-                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+
+                {/* Direction Switcher Toggle & Capital Inputs */}
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  {/* Direction Mode Toggle */}
+                  <div style={{ display: 'flex', background: 'rgba(0,0,0,0.3)', padding: '0.2rem', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                    <button
+                      onClick={() => setManualDirection('auto')}
+                      style={{
+                        background: manualDirection === 'auto' ? 'var(--accent)' : 'transparent',
+                        color: manualDirection === 'auto' ? '#fff' : 'var(--text-secondary)',
+                        border: 'none',
+                        padding: '0.2rem 0.5rem',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '0.72rem',
+                        fontWeight: manualDirection === 'auto' ? 'bold' : 'normal'
+                      }}
+                    >
+                      AI Auto ({autoDir})
+                    </button>
+                    <button
+                      onClick={() => setManualDirection('BUY')}
+                      style={{
+                        background: manualDirection === 'BUY' ? '#10b981' : 'transparent',
+                        color: manualDirection === 'BUY' ? '#000' : 'var(--text-secondary)',
+                        border: 'none',
+                        padding: '0.2rem 0.5rem',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '0.72rem',
+                        fontWeight: manualDirection === 'BUY' ? 'bold' : 'normal'
+                      }}
+                    >
+                      Long (Buy)
+                    </button>
+                    <button
+                      onClick={() => setManualDirection('SELL')}
+                      style={{
+                        background: manualDirection === 'SELL' ? '#ef4444' : 'transparent',
+                        color: manualDirection === 'SELL' ? '#fff' : 'var(--text-secondary)',
+                        border: 'none',
+                        padding: '0.2rem 0.5rem',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '0.72rem',
+                        fontWeight: manualDirection === 'SELL' ? 'bold' : 'normal'
+                      }}
+                    >
+                      Short (Sell)
+                    </button>
+                  </div>
+
                   <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                    Portfolio Capital ($):
+                    Capital ($):
                     <input
                       type="number"
                       value={accountEquity}
                       onChange={(e) => setAccountEquity(Number(e.target.value))}
-                      style={{ width: '90px', marginLeft: '0.4rem', padding: '0.2rem 0.4rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: 'white', borderRadius: '4px' }}
+                      style={{ width: '85px', marginLeft: '0.4rem', padding: '0.2rem 0.4rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: 'white', borderRadius: '4px' }}
                     />
                   </label>
                   <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
@@ -430,38 +518,66 @@ function App() {
                       step="0.1"
                       value={riskPercent}
                       onChange={(e) => setRiskPercent(Number(e.target.value))}
-                      style={{ width: '60px', marginLeft: '0.4rem', padding: '0.2rem 0.4rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: 'white', borderRadius: '4px' }}
+                      style={{ width: '55px', marginLeft: '0.4rem', padding: '0.2rem 0.4rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: 'white', borderRadius: '4px' }}
                     />
                   </label>
                 </div>
               </div>
 
+              {/* Position Sizing Cards */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '1rem' }}>
                 <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '8px' }}>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Max Risk ($)</div>
                   <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--danger)' }}>${maxRiskAmount.toFixed(2)}</div>
                 </div>
+
+                {/* Stop Loss Card */}
                 <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '8px', borderLeft: '3px solid var(--danger)' }}>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Stop Loss (1.5× ATR)</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--danger)' }}>${(activeRiskLevels?.stop_loss || (livePrice - stopLossDistance)).toFixed(2)}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    Stop Loss ({isShortTrade ? 'Above Entry' : 'Below Entry'}: 1.5× ATR)
+                  </div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--danger)' }}>${stopLossVal.toFixed(2)}</div>
                 </div>
+
+                {/* Take Profit 1 */}
                 <div style={{ background: 'rgba(16,185,129,0.1)', padding: '0.75rem', borderRadius: '8px', borderLeft: '3px solid #10b981' }}>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Take Profit 1 <span style={{ background: '#10b981', color: '#000', borderRadius: '4px', padding: '0 5px', fontSize: '0.7rem', fontWeight: 'bold' }}>1:2 R/R</span></div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#10b981' }}>${(activeRiskLevels?.take_profit_1 || (livePrice + 2 * stopLossDistance)).toFixed(2)}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    Take Profit 1 <span style={{ background: '#10b981', color: '#000', borderRadius: '4px', padding: '0 5px', fontSize: '0.7rem', fontWeight: 'bold' }}>1:2 R/R</span>
+                  </div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#10b981' }}>${tp1Val.toFixed(2)}</div>
                 </div>
+
+                {/* Take Profit 2 */}
                 <div style={{ background: 'rgba(5,150,105,0.1)', padding: '0.75rem', borderRadius: '8px', borderLeft: '3px solid #059669' }}>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Take Profit 2 <span style={{ background: '#059669', color: '#fff', borderRadius: '4px', padding: '0 5px', fontSize: '0.7rem', fontWeight: 'bold' }}>1:3 R/R</span></div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#059669' }}>${(activeRiskLevels?.take_profit_2 || (livePrice + 3 * stopLossDistance)).toFixed(2)}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    Take Profit 2 <span style={{ background: '#059669', color: '#fff', borderRadius: '4px', padding: '0 5px', fontSize: '0.7rem', fontWeight: 'bold' }}>1:3 R/R</span>
+                  </div>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#059669' }}>${tp2Val.toFixed(2)}</div>
                 </div>
+
                 <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '8px' }}>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Suggested Position Size</div>
                   <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#60a5fa' }}>{suggestedUnits.toFixed(2)} Units</div>
                 </div>
+
                 <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '8px' }}>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Total Capital Allocated</div>
                   <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>${positionValue.toFixed(2)}</div>
                 </div>
               </div>
+
+              {/* Neutral Consolidation Guidance Banner */}
+              {isNeutralTrade && (
+                <div style={{ marginTop: '0.75rem', padding: '0.6rem 0.8rem', background: 'rgba(234, 179, 8, 0.08)', borderRadius: '6px', border: '1px solid rgba(234, 179, 8, 0.3)', fontSize: '0.78rem', color: '#eab308' }}>
+                  ⚠️ <strong>Consolidation Notice:</strong> Technical momentum is neutral/ranging. Conservative traders wait for a breakout.
+                  {activeRiskLevels?.neutral_breakout_buy && (
+                    <span style={{ marginLeft: '0.5rem', color: 'var(--text-primary)' }}>
+                      • Breakout Buy: &gt; ${activeRiskLevels.neutral_breakout_buy.trigger} (TP: ${activeRiskLevels.neutral_breakout_buy.take_profit_1})
+                      • Breakdown Sell: &lt; ${activeRiskLevels.neutral_breakdown_sell.trigger} (TP: ${activeRiskLevels.neutral_breakdown_sell.take_profit_1})
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

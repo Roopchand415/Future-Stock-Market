@@ -168,6 +168,7 @@ const StockChart = ({ data, predictions, symbol, company, riskLevels }) => {
                 : dates[dates.length - 1];
 
             const riskDates = [lastHistoricalDate, forecastLastDate];
+            const dirPrefix = riskLevels.direction === 'SELL' ? 'Short ' : (riskLevels.direction === 'BUY' ? 'Long ' : '');
 
             // Stop Loss
             trs.push({
@@ -175,7 +176,7 @@ const StockChart = ({ data, predictions, symbol, company, riskLevels }) => {
                 y: [riskLevels.stop_loss, riskLevels.stop_loss],
                 type: 'scatter',
                 mode: 'lines',
-                name: `Stop Loss ($${riskLevels.stop_loss})`,
+                name: `${dirPrefix}Stop Loss ($${riskLevels.stop_loss})`,
                 line: { color: '#ef4444', width: 2, dash: 'dash' }
             });
 
@@ -185,7 +186,7 @@ const StockChart = ({ data, predictions, symbol, company, riskLevels }) => {
                 y: [riskLevels.take_profit_1, riskLevels.take_profit_1],
                 type: 'scatter',
                 mode: 'lines',
-                name: `TP1 — 1:2 R/R ($${riskLevels.take_profit_1})`,
+                name: `${dirPrefix}TP1 1:2 R/R ($${riskLevels.take_profit_1})`,
                 line: { color: '#10b981', width: 2, dash: 'dot' }
             });
 
@@ -195,7 +196,7 @@ const StockChart = ({ data, predictions, symbol, company, riskLevels }) => {
                 y: [riskLevels.take_profit_2, riskLevels.take_profit_2],
                 type: 'scatter',
                 mode: 'lines',
-                name: `TP2 — 1:3 R/R ($${riskLevels.take_profit_2})`,
+                name: `${dirPrefix}TP2 1:3 R/R ($${riskLevels.take_profit_2})`,
                 line: { color: '#059669', width: 1.5, dash: 'dot' }
             });
         }
