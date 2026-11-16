@@ -77,6 +77,12 @@ from services.cache import (
     symbol_lookup_cache
 )
 
+from services.model_store import prune_old_models
+from services.binance_ws import start_stream, get_live_price
+
+# Prune stale model files at startup
+prune_old_models()
+
 # Optional TradingView analysis import
 try:
     from tradingview_ta import TA_Handler, Interval
@@ -539,6 +545,145 @@ def predict_stock(symbol):
     except Exception as e:
         print(f"Error in /api/predict: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+# =====================================================================
+# GRU Deep Learning Prediction Endpoint
+# =====================================================================
+
+@app.route('/api/predict/gru', methods=['GET'])
+def predict_gru():
+    """
+    Train and run the real GRU deep learning model for a symbol.
+    Returns 7-day GRU forecast alongside model validation accuracy.
+    """
+    from services.prediction import train_gru_model, predict_future_gru
+
+    symbol = request.args.get('symbol', 'AAPL').upper()
+    interval = request.args.get('interval', '1d')
+
+    try:
+        # Fetch historical data (reuse existing logic)
+        is_crypto = is_crypto_symbol(symbol)
+        if is_crypto:
+            df = fetch_crypto_historical_data(symbol, days=365 * 3)
+        else:
+            period = '3y'
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period=period, interval=interval)
+            if hist.empty:
+                return jsonify({"error": f"No data for {symbol}"}), 404
+            hist = hist.reset_index()
+            hist.rename(columns={'Datetime': 'Date', 'index': 'Date'}, inplace=True)
+            if 'Date' not in hist.columns and hist.index.name == 'Date':
+                hist = hist.reset_index()
+            df = hist
+
+        if df is None or len(df) < 60:
+            return jsonify({"error": "Insufficient data for GRU (need 60+ bars)"}), 400
+
+        gru_dict = train_gru_model(df, symbol=symbol, interval=interval)
+
+        if gru_dict.get('is_fallback'):
+            return jsonify({"error": "GRU training failed — insufficient data or PyTorch unavailable"}), 400
+
+        preds = predict_future_gru(gru_dict, days=7)
+        last_close = float(df['Close'].iloc[-1])
+        last_date = str(df['Date'].iloc[-1]) if 'Date' in df.columns else 'N/A'
+
+        return jsonify({
+            "symbol": symbol,
+            "model": "GRU (Gated Recurrent Unit — PyTorch)",
+            "val_directional_accuracy_pct": gru_dict.get('val_dir_accuracy', 'N/A'),
+            "seq_len": gru_dict.get('seq_len', 30),
+            "last_close": round(last_close, 4),
+            "predictions": [
+                {"day": i + 1, "price": p, "change_pct": round((p / last_close - 1) * 100, 2)}
+                for i, p in enumerate(preds)
+            ],
+            "note": "GRU model trained on 30-bar rolling windows; val accuracy measured on out-of-sample data."
+        })
+
+    except Exception as e:
+        print(f"Error in /api/predict/gru: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# =====================================================================
+# Real-Time SSE Price Streaming (Binance WebSocket → Server-Sent Events)
+# =====================================================================
+
+import time as _time
+
+@app.route('/api/stream/<symbol>')
+def stream_price(symbol):
+    """
+    Server-Sent Events (SSE) endpoint for real-time price streaming.
+    Crypto: pulls from Binance WebSocket (sub-100ms updates).
+    Stocks: falls back to 10s yfinance polling.
+
+    Usage in frontend:
+        const es = new EventSource('/api/stream/BTC');
+        es.onmessage = (e) => { const data = JSON.parse(e.data); ... };
+    """
+    import json as _json
+    sym = symbol.upper()
+
+    # Start Binance WebSocket stream if crypto
+    if is_crypto_symbol(sym):
+        try:
+            start_stream(sym)
+        except Exception as e:
+            print(f"[SSE] Stream start error: {e}")
+
+    def generate():
+        last_sent = 0
+        while True:
+            now = _time.time()
+
+            # For crypto: use WebSocket cached price (high frequency)
+            ws_data = get_live_price(sym)
+            if ws_data and (now - last_sent) >= 1.0:
+                payload = _json.dumps({
+                    "symbol": sym,
+                    "price": ws_data['price'],
+                    "high": ws_data.get('high', 0),
+                    "low": ws_data.get('low', 0),
+                    "change_pct": ws_data.get('change_pct', 0),
+                    "source": "binance_ws",
+                    "ts": now
+                })
+                yield f"data: {payload}\n\n"
+                last_sent = now
+            elif (now - last_sent) >= 10.0:
+                # Fallback: yfinance for stocks or if WS is down
+                try:
+                    ticker = yf.Ticker(sym)
+                    info = ticker.fast_info
+                    price = float(getattr(info, 'last_price', 0) or 0)
+                    if price > 0:
+                        payload = _json.dumps({
+                            "symbol": sym,
+                            "price": price,
+                            "source": "yfinance_poll",
+                            "ts": now
+                        })
+                        yield f"data: {payload}\n\n"
+                        last_sent = now
+                except Exception:
+                    pass
+
+            _time.sleep(0.5)
+
+    return app.response_class(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive'
+        }
+    )
 
 
 # =====================================================================

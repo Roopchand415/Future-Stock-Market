@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import StockChart from './components/StockChart'
 import TradingViewWidget from './components/TradingViewWidget'
-import { Search, Activity, TrendingUp, DollarSign, BarChart2, Star, ShieldAlert, Target, Award, Plus, Trash2 } from 'lucide-react'
+import { Search, Activity, TrendingUp, DollarSign, BarChart2, Star, ShieldAlert, Target, Award, Plus, Trash2, Cpu } from 'lucide-react'
 
 const DEFAULT_WATCHLIST = ['BTC', 'ETH', 'SOL', 'AAPL', 'TSLA', 'NVDA', 'XAUUSD']
 
@@ -19,6 +19,8 @@ function App() {
   const [currentStats, setCurrentStats] = useState(null)
   const [viewMode, setViewMode] = useState('analytics')
   const [selectedInterval, setSelectedInterval] = useState('1d')
+  const [gruResult, setGruResult] = useState(null)
+  const [loadingGru, setLoadingGru] = useState(false)
 
   // Request cancellation ref
   const abortControllerRef = useRef(null)
@@ -118,6 +120,21 @@ function App() {
       alert("Prediction failed: " + (err.response?.data?.error || "Check backend connection"))
     } finally {
       setLoadingPred(false)
+    }
+  }
+
+  const fetchGruPrediction = async () => {
+    if (!data) return
+    setLoadingGru(true)
+    setGruResult(null)
+    try {
+      const res = await axios.get(`/api/predict/gru?symbol=${symbol}&interval=${selectedInterval}`)
+      setGruResult(res.data)
+    } catch (err) {
+      console.error(err)
+      alert("GRU prediction failed: " + (err.response?.data?.error || "Check backend / PyTorch installed"))
+    } finally {
+      setLoadingGru(false)
     }
   }
 
@@ -501,13 +518,41 @@ function App() {
                   {loadingPred ? 'Thinking...' : 'Linear Momentum Model'}
                 </button>
                 <button className="btn" disabled={loadingPred} style={{ background: '#8b5cf6' }} onClick={() => fetchPrediction('lstm')}>
-                  {loadingPred ? 'Computing Ensemble...' : 'Quant Hybrid Ensemble (MLP+RF+Ridge)'}
+                  {loadingPred ? 'Computing Ensemble...' : '⚡ Hybrid Ensemble (MLP+RF+Ridge+XGBoost)'}
+                </button>
+                <button className="btn" disabled={loadingGru} style={{ background: '#0ea5e9' }} onClick={fetchGruPrediction}>
+                  <Cpu size={15} style={{ marginRight: '0.4rem', verticalAlign: 'text-bottom' }} />
+                  {loadingGru ? 'Training GRU...' : 'GRU Deep Learning (PyTorch)'}
                 </button>
               </div>
             </div>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0 }}>
               Generates a 7-day direct path return forecast with 95% dynamic EWMA volatility confidence corridors, validated via leak-free walk-forward testing.
             </p>
+
+            {/* GRU Result Panel */}
+            {gruResult && (
+              <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(14,165,233,0.08)', borderRadius: '8px', border: '1px solid rgba(14,165,233,0.3)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                  <strong style={{ color: '#0ea5e9' }}>🧠 GRU Deep Learning — 7-Day Forecast</strong>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    Val Directional Accuracy: <strong style={{ color: '#10b981' }}>{gruResult.val_directional_accuracy_pct}%</strong>
+                    &nbsp;|&nbsp;Seq Len: {gruResult.seq_len} bars
+                  </span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: '0.5rem' }}>
+                  {gruResult.predictions?.map((p, i) => (
+                    <div key={i} style={{ background: 'rgba(0,0,0,0.2)', padding: '0.5rem', borderRadius: '6px', textAlign: 'center' }}>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Day {p.day}</div>
+                      <div style={{ fontWeight: 'bold', fontSize: '0.95rem' }}>${p.price?.toFixed(2)}</div>
+                      <div style={{ fontSize: '0.75rem', color: p.change_pct >= 0 ? '#10b981' : '#ef4444' }}>
+                        {p.change_pct >= 0 ? '+' : ''}{p.change_pct?.toFixed(2)}%
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 7-Day Prediction Table */}

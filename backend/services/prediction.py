@@ -1,11 +1,12 @@
 """
 prediction.py - Quantitative Machine Learning & Financial Forecasting Engine
 Provides mathematically defensible models, honest walk-forward evaluation, and risk analytics:
-- Quant Hybrid Ensemble (MLP Neural Net + Random Forest + Regularized Ridge)
-- Deep Sequence Modeling (Temporal multi-step feature windowing)
+- Quant Hybrid Ensemble (MLP Neural Net + Random Forest + Ridge + XGBoost)
+- Real GRU (Gated Recurrent Unit) Deep Learning Model via PyTorch
 - Leak-free Walk-Forward Backtesting against naive baselines (Random Walk & Majority Drift)
 - Direct multi-horizon return projections (eliminating recursive OHLC error compounding)
 - ATR & Fibonacci Dynamic Risk Management (Stop Loss, Take Profit 1/2/3)
+- Joblib Disk-Persistent Model Caching (sub-second prediction after first run)
 """
 
 import os
@@ -15,10 +16,26 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 import numpy as np
 import pandas as pd
+import logging
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.neural_network import MLPRegressor
+
+# XGBoost (optional — graceful fallback if not installed)
+try:
+    from xgboost import XGBRegressor
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    XGBOOST_AVAILABLE = False
+
+# PyTorch GRU (optional — graceful fallback if not installed)
+try:
+    import torch
+    import torch.nn as nn
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
 from services.indicators import (
     calculate_indicators,
@@ -26,6 +43,9 @@ from services.indicators import (
     FEATURE_COLUMNS
 )
 from services.cache import model_cache
+from services.model_store import load_model, save_model
+
+logger = logging.getLogger(__name__)
 
 
 def prepare_data(df, look_back=30):
@@ -36,8 +56,207 @@ def prepare_data(df, look_back=30):
 
 
 # =====================================================================
-# 1. Linear & Momentum Regression Model
+# GRU Deep Learning Model (PyTorch)
 # =====================================================================
+
+class GRUPriceModel(nn.Module if TORCH_AVAILABLE else object):
+    """
+    2-layer Gated Recurrent Unit for financial time-series forecasting.
+    Input:  (batch, seq_len, n_features)
+    Output: (batch, 1) — predicted next log-return
+    """
+    def __init__(self, n_features, hidden_size=64, num_layers=2, dropout=0.2):
+        if TORCH_AVAILABLE:
+            super().__init__()
+            self.gru = nn.GRU(
+                input_size=n_features,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                batch_first=True,
+                dropout=dropout if num_layers > 1 else 0.0
+            )
+            self.dropout = nn.Dropout(dropout)
+            self.fc = nn.Linear(hidden_size, 1)
+
+    def forward(self, x):
+        out, _ = self.gru(x)       # (batch, seq, hidden)
+        out = self.dropout(out[:, -1, :])  # last timestep
+        return self.fc(out).squeeze(-1)
+
+
+def train_gru_model(df, symbol=None, interval=None, seq_len=30):
+    """
+    Train a real GRU model on OHLCV + indicator features.
+
+    Parameters:
+        df         : Raw historical DataFrame (3+ years preferred)
+        symbol     : Used for disk-cache key
+        interval   : Used for disk-cache key
+        seq_len    : Lookback window length (30 bars)
+
+    Returns:
+        dict with keys: 'gru', 'scaler', 'features', 'seq_len', 'return_std', 'is_fallback'
+    """
+    if not TORCH_AVAILABLE:
+        logger.warning("PyTorch not available — GRU model will use ensemble fallback")
+        return train_hybrid_ensemble(df, symbol, interval)
+
+    # Disk cache check
+    last_bar = str(df['Date'].iloc[-1]) if 'Date' in df.columns and len(df) > 0 else 'unknown'
+    if symbol and interval:
+        cached = load_model(symbol, interval, last_bar, model_type='gru')
+        if cached is not None:
+            return cached
+
+    df_feat = calculate_indicators(df, drop_warmup=True)
+    if df_feat is None or len(df_feat) < seq_len + 15:
+        logger.warning(f"GRU: insufficient data ({len(df_feat) if df_feat is not None else 0} rows)")
+        return {'is_fallback': True}
+
+    df_feat['Target_Return'] = df_feat['Return_1d'].shift(-1)
+    df_clean = df_feat.dropna(subset=FEATURE_COLUMNS + ['Target_Return']).copy()
+
+    X_raw = df_clean[FEATURE_COLUMNS].values.astype(np.float32)
+    y_raw = df_clean['Target_Return'].values.astype(np.float32)
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_raw)
+
+    # Build rolling windows: (n_windows, seq_len, n_features)
+    n_features = len(FEATURE_COLUMNS)
+    sequences, targets = [], []
+    for i in range(seq_len, len(X_scaled)):
+        sequences.append(X_scaled[i - seq_len:i])
+        targets.append(y_raw[i])
+
+    if len(sequences) < 20:
+        return {'is_fallback': True}
+
+    X_seq = np.array(sequences, dtype=np.float32)
+    y_seq = np.array(targets, dtype=np.float32)
+
+    # Chronological split: 85% train, 15% val (NO shuffle)
+    split = int(len(X_seq) * 0.85)
+    X_tr, X_val = X_seq[:split], X_seq[split:]
+    y_tr, y_val = y_seq[:split], y_seq[split:]
+
+    X_tr_t  = torch.tensor(X_tr)
+    y_tr_t  = torch.tensor(y_tr)
+    X_val_t = torch.tensor(X_val)
+    y_val_t = torch.tensor(y_val)
+
+    model = GRUPriceModel(n_features=n_features, hidden_size=64, num_layers=2, dropout=0.2)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+    criterion = nn.MSELoss()
+
+    best_val_loss = float('inf')
+    patience, patience_count = 10, 0
+    best_state = None
+
+    model.train()
+    for epoch in range(80):
+        optimizer.zero_grad()
+        pred = model(X_tr_t)
+        loss = criterion(pred, y_tr_t)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+        # Validation
+        model.eval()
+        with torch.no_grad():
+            val_pred = model(X_val_t)
+            val_loss = criterion(val_pred, y_val_t).item()
+        model.train()
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_state = {k: v.clone() for k, v in model.state_dict().items()}
+            patience_count = 0
+        else:
+            patience_count += 1
+            if patience_count >= patience:
+                break
+
+    if best_state:
+        model.load_state_dict(best_state)
+    model.eval()
+
+    # Directional accuracy on val set
+    model.eval()
+    with torch.no_grad():
+        val_preds = model(X_val_t).numpy()
+    gru_dir_acc = float(np.mean((val_preds >= 0) == (y_val >= 0)))
+
+    model_dict = {
+        'gru': model,
+        'scaler': scaler,
+        'features': FEATURE_COLUMNS,
+        'seq_len': seq_len,
+        'return_std': float(np.std(y_raw)),
+        'val_dir_accuracy': round(gru_dir_acc * 100, 1),
+        'last_sequence': X_scaled[-seq_len:],   # for fast inference
+        'df': df,
+        'is_fallback': False,
+        'model_type': 'GRU'
+    }
+
+    if symbol and interval:
+        save_model(model_dict, symbol, interval, last_bar, model_type='gru')
+
+    logger.info(f"GRU trained: {symbol}/{interval} — val dir accuracy {gru_dir_acc*100:.1f}%")
+    return model_dict
+
+
+def predict_future_gru(gru_dict, days=7, sentiment_score=0.0):
+    """
+    Generate multi-day price forecasts using the trained GRU model.
+    Uses the last seq_len bars as the seed sequence.
+    """
+    if not TORCH_AVAILABLE or gru_dict.get('is_fallback', True):
+        return None
+
+    model = gru_dict['gru']
+    scaler = gru_dict['scaler']
+    seq_len = gru_dict['seq_len']
+    df = gru_dict['df']
+    last_seq = gru_dict['last_sequence'].copy()
+
+    df_feat = calculate_indicators(df, drop_warmup=False)
+    last_close = float(df['Close'].iloc[-1])
+    vol = float(df_feat['EWMA_Vol'].iloc[-1]) if 'EWMA_Vol' in df_feat.columns else 0.012
+    clip = max(0.01, min(0.04, 2.0 * vol))
+
+    # Sentiment drift (calibrated, single application)
+    sentiment_drift = float(np.clip(sentiment_score * 0.003, -0.008, 0.008))
+
+    model.eval()
+    predictions = []
+    current_seq = torch.tensor(last_seq[np.newaxis, :, :], dtype=torch.float32)
+    current_p = last_close
+
+    for step in range(days):
+        with torch.no_grad():
+            pred_return = model(current_seq).item()
+        pred_return = float(np.clip(pred_return + sentiment_drift * (0.9 ** step), -clip, clip))
+        next_p = current_p * np.exp(pred_return)
+        predictions.append(float(round(next_p, 4)))
+        current_p = next_p
+
+        # Slide the window (simple: repeat last row with updated return)
+        new_row = current_seq[0, -1, :].numpy().copy()
+        # Update Return_1d feature (index 9 in FEATURE_COLUMNS)
+        if 'Return_1d' in FEATURE_COLUMNS:
+            idx = FEATURE_COLUMNS.index('Return_1d')
+            # Scale back: unscale, update, rescale
+            new_row[idx] = pred_return / (scaler.scale_[idx] + 1e-9) + scaler.mean_[idx]
+        new_row_t = torch.tensor(new_row[np.newaxis, np.newaxis, :], dtype=torch.float32)
+        current_seq = torch.cat([current_seq[:, 1:, :], new_row_t], dim=1)
+
+    return predictions
+
+
+
 
 def train_linear_regression(df):
     """
@@ -114,17 +333,27 @@ def predict_future_linear(model, last_date, days=7, interval='1d'):
 
 
 # =====================================================================
-# 2. Quant Hybrid Ensemble (MLP + Random Forest + Ridge)
+# 2. Quant Hybrid Ensemble (MLP + Random Forest + Ridge + XGBoost)
 # =====================================================================
 
 def train_hybrid_ensemble(df, symbol=None, interval=None):
     """
-    Trains a Quant-AI Hybrid Ensemble Model (MLP Neural Net + Random Forest + Ridge).
+    Trains a Quant-AI Hybrid Ensemble Model:
+      MLP Neural Net + Random Forest + Ridge Regression + XGBoost (if available).
     Uses leak-free chronological time-split validation to establish soft-voting weights.
+    Persists trained models to disk so repeated calls are instant (joblib cache).
     """
-    # Check model cache
+    last_bar = str(df['Date'].iloc[-1]) if 'Date' in df.columns and len(df) > 0 else 'unknown'
+
+    # 1. Check disk cache first (fastest: <100ms)
+    if symbol and interval:
+        cached = load_model(symbol, interval, last_bar, model_type='ensemble')
+        if cached is not None:
+            return cached, None
+
+    # 2. Check in-memory TTL cache (second fastest)
     if symbol and interval and len(df) > 0:
-        cache_key = f"model_ens_{symbol}_{interval}_{str(df['Date'].iloc[-1])}"
+        cache_key = f"model_ens_{symbol}_{interval}_{last_bar}"
         cached = model_cache.get(cache_key)
         if cached is not None:
             return cached, None
@@ -140,9 +369,11 @@ def train_hybrid_ensemble(df, symbol=None, interval=None):
             "mlp": dummy_ridge,
             "rf": dummy_ridge,
             "ridge": dummy_ridge,
-            "w_mlp": 0.35,
-            "w_rf": 0.40,
-            "w_ridge": 0.25,
+            "xgb": None,
+            "w_mlp": 0.30,
+            "w_rf": 0.35,
+            "w_ridge": 0.20,
+            "w_xgb": 0.15,
             "scaler": scaler,
             "features": FEATURE_COLUMNS,
             "df": df,
@@ -153,7 +384,7 @@ def train_hybrid_ensemble(df, symbol=None, interval=None):
 
     # Target is next period log return
     df_feat['Target_Return'] = df_feat['Return_1d'].shift(-1)
-    df_clean = df_feat.iloc[:-1].copy()
+    df_clean = df_feat.dropna(subset=FEATURE_COLUMNS + ['Target_Return']).copy()
 
     X = df_clean[FEATURE_COLUMNS].values
     y = df_clean['Target_Return'].values
@@ -169,65 +400,105 @@ def train_hybrid_ensemble(df, symbol=None, interval=None):
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled = scaler.transform(X_val)
 
+    # Recency weights for Ridge
+    rec_weights = np.exp(np.linspace(-1.5, 0.0, len(X_train)))
+
     # 1. Multi-Layer Perceptron (MLP Neural Network)
     mlp = MLPRegressor(
-        hidden_layer_sizes=(48, 24),
+        hidden_layer_sizes=(64, 32),
         activation='relu',
         solver='adam',
-        max_iter=350,
+        max_iter=400,
         random_state=42,
         early_stopping=True,
-        validation_fraction=0.15
+        validation_fraction=0.15,
+        learning_rate_init=5e-4
     )
     mlp.fit(X_train_scaled, y_train)
 
     # 2. Random Forest Regressor
     rf = RandomForestRegressor(
-        n_estimators=80,
-        max_depth=5,
+        n_estimators=100,
+        max_depth=6,
         min_samples_split=4,
-        random_state=42
+        min_samples_leaf=2,
+        random_state=42,
+        n_jobs=-1
     )
     rf.fit(X_train_scaled, y_train)
 
     # 3. Regularized Ridge Regressor with exponential recency weighting
-    weights = np.exp(np.linspace(-1.5, 0.0, len(X_train)))
     ridge = Ridge(alpha=2.0)
-    ridge.fit(X_train_scaled, y_train, sample_weight=weights)
+    ridge.fit(X_train_scaled, y_train, sample_weight=rec_weights)
+
+    # 4. XGBoost Regressor (if available)
+    xgb = None
+    if XGBOOST_AVAILABLE:
+        xgb = XGBRegressor(
+            n_estimators=150,
+            max_depth=4,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_alpha=0.1,
+            reg_lambda=1.0,
+            random_state=42,
+            verbosity=0,
+            n_jobs=1
+        )
+        xgb.fit(X_train_scaled, y_train,
+                eval_set=[(X_val_scaled, y_val)],
+                verbose=False)
 
     # Evaluate directional accuracy on OUT-OF-SAMPLE validation set
-    pred_val_mlp = mlp.predict(X_val_scaled)
-    pred_val_rf = rf.predict(X_val_scaled)
+    pred_val_mlp   = mlp.predict(X_val_scaled)
+    pred_val_rf    = rf.predict(X_val_scaled)
     pred_val_ridge = ridge.predict(X_val_scaled)
 
-    acc_mlp = max(0.40, float(np.mean((pred_val_mlp >= 0) == (y_val >= 0))))
-    acc_rf = max(0.40, float(np.mean((pred_val_rf >= 0) == (y_val >= 0))))
+    acc_mlp   = max(0.40, float(np.mean((pred_val_mlp   >= 0) == (y_val >= 0))))
+    acc_rf    = max(0.40, float(np.mean((pred_val_rf    >= 0) == (y_val >= 0))))
     acc_ridge = max(0.40, float(np.mean((pred_val_ridge >= 0) == (y_val >= 0))))
 
-    # Soft voting weights proportional to out-of-sample accuracy
-    weights_raw = np.array([acc_mlp, acc_rf, acc_ridge]) ** 2
-    total_w = np.sum(weights_raw)
-    w_mlp, w_rf, w_ridge = weights_raw / total_w
+    if xgb is not None:
+        pred_val_xgb = xgb.predict(X_val_scaled)
+        acc_xgb = max(0.40, float(np.mean((pred_val_xgb >= 0) == (y_val >= 0))))
+        weights_raw = np.array([acc_mlp, acc_rf, acc_ridge, acc_xgb]) ** 2
+        total_w = np.sum(weights_raw)
+        w_mlp, w_rf, w_ridge, w_xgb = weights_raw / total_w
+    else:
+        weights_raw = np.array([acc_mlp, acc_rf, acc_ridge]) ** 2
+        total_w = np.sum(weights_raw)
+        w_mlp, w_rf, w_ridge = weights_raw / total_w
+        w_xgb = 0.0
 
     return_std = float(np.std(y)) if len(y) > 1 else 0.012
 
     model_dict = {
-        "mlp": mlp,
-        "rf": rf,
-        "ridge": ridge,
-        "w_mlp": float(w_mlp),
-        "w_rf": float(w_rf),
-        "w_ridge": float(w_ridge),
-        "scaler": scaler,
+        "mlp":      mlp,
+        "rf":       rf,
+        "ridge":    ridge,
+        "xgb":      xgb,
+        "w_mlp":    float(w_mlp),
+        "w_rf":     float(w_rf),
+        "w_ridge":  float(w_ridge),
+        "w_xgb":    float(w_xgb),
+        "scaler":   scaler,
         "features": FEATURE_COLUMNS,
-        "df": df,
+        "df":       df,
         "return_std": return_std,
-        "is_fallback": False
+        "is_fallback": False,
+        "xgboost_available": XGBOOST_AVAILABLE,
+        "model_type": "Hybrid Ensemble (MLP+RF+Ridge" + ("+XGBoost)" if XGBOOST_AVAILABLE else ")")
     }
 
-    if symbol and interval and len(df) > 0:
+    # Persist to disk and in-memory cache
+    if symbol and interval:
+        save_model(model_dict, symbol, interval, last_bar, model_type='ensemble')
+        cache_key = f"model_ens_{symbol}_{interval}_{last_bar}"
         model_cache.set(cache_key, model_dict, ttl=1800)
 
+    logger.info(f"Ensemble trained: {symbol}/{interval} — MLP:{acc_mlp:.2f} RF:{acc_rf:.2f} Ridge:{acc_ridge:.2f}" +
+                (f" XGB:{acc_xgb:.2f}" if xgb is not None else ""))
     return model_dict, None
 
 
@@ -263,12 +534,21 @@ def predict_future_lstm(model, scaler_placeholder, data_placeholder, look_back=6
     X_last = last_row[features].values
     X_scaled = scaler.transform(X_last)
 
-    # Ensemble forward return prediction
-    p_mlp = mlp.predict(X_scaled)[0]
-    p_rf = rf.predict(X_scaled)[0]
+    # Ensemble forward return prediction (MLP + RF + Ridge + XGBoost)
+    p_mlp   = mlp.predict(X_scaled)[0]
+    p_rf    = rf.predict(X_scaled)[0]
     p_ridge = ridge.predict(X_scaled)[0]
 
-    base_return = (w_mlp * p_mlp) + (w_rf * p_rf) + (w_ridge * p_ridge)
+    xgb     = model.get('xgb')
+    w_xgb   = model.get('w_xgb', 0.0)
+
+    if xgb is not None and w_xgb > 0:
+        p_xgb = xgb.predict(X_scaled)[0]
+        base_return = (w_mlp * p_mlp) + (w_rf * p_rf) + (w_ridge * p_ridge) + (w_xgb * p_xgb)
+    else:
+        # Renormalize weights if no XGBoost
+        total = w_mlp + w_rf + w_ridge + 1e-9
+        base_return = ((w_mlp/total) * p_mlp) + ((w_rf/total) * p_rf) + ((w_ridge/total) * p_ridge)
 
     # Calibrated single sentiment impact (damped, non-compounded feature adjustment)
     sentiment_drift = float(np.clip(sentiment_score * 0.003, -0.008, 0.008))

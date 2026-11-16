@@ -18,7 +18,8 @@ FEATURE_COLUMNS = [
     'Close_to_SMA20', 'Close_to_SMA50', 'EMA9_to_EMA21',
     'RSI', 'MACD_Line', 'MACD_Signal', 'MACD_Diff',
     'BB_Width', 'BB_Percent', 'Return_1d', 'Return_3d',
-    'Return_5d', 'ATR_Pct', 'Volume_Ratio'
+    'Return_5d', 'Return_10d', 'ATR_Pct', 'Volume_Ratio',
+    'Vol_Regime', 'DayOfWeek', 'Return_2d', 'Price_Momentum'
 ]
 
 
@@ -103,13 +104,33 @@ def calculate_indicators(df, drop_warmup=False, warmup_periods=35):
 
     # 6. Stationary Log Returns
     df['Return_1d'] = np.log(df['Close'] / df['Close'].shift(1)).fillna(0.0)
+    df['Return_2d'] = np.log(df['Close'] / df['Close'].shift(2)).fillna(0.0)
     df['Return_3d'] = np.log(df['Close'] / df['Close'].shift(3)).fillna(0.0)
     df['Return_5d'] = np.log(df['Close'] / df['Close'].shift(5)).fillna(0.0)
+    df['Return_10d'] = np.log(df['Close'] / df['Close'].shift(10)).fillna(0.0)
+
+    # Short-term price momentum (5d EMA of return)
+    df['Price_Momentum'] = df['Return_1d'].ewm(span=5, adjust=False).mean().fillna(0.0)
 
     # 7. Dynamic EWMA Volatility (20-bar span)
     df['EWMA_Vol'] = df['Return_1d'].ewm(span=20, min_periods=5).std().fillna(0.012)
     # Ensure floor on volatility so confidence intervals don't collapse
     df['EWMA_Vol'] = df['EWMA_Vol'].clip(lower=0.005)
+
+    # 7b. Volatility Regime: 1 = High Vol, 0 = Low Vol (rolling 20-bar median split)
+    vol_median = df['EWMA_Vol'].rolling(window=60, min_periods=10).median().fillna(df['EWMA_Vol'].median())
+    df['Vol_Regime'] = (df['EWMA_Vol'] > vol_median).astype(float)
+
+    # 7c. Day-of-week feature (0=Mon...4=Fri; normalised 0-1)
+    if hasattr(df.index, 'dayofweek'):
+        df['DayOfWeek'] = df.index.dayofweek / 4.0
+    elif 'Date' in df.columns:
+        try:
+            df['DayOfWeek'] = pd.to_datetime(df['Date']).dt.dayofweek / 4.0
+        except Exception:
+            df['DayOfWeek'] = 0.5
+    else:
+        df['DayOfWeek'] = 0.5
 
     # 8. Volume Dynamics
     if 'Volume' in df.columns:
