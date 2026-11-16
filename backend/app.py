@@ -10,7 +10,8 @@ import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
-app = Flask(__name__, static_folder='../dist', static_url_path='/')
+DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'dist'))
+app = Flask(__name__, static_folder=DIST_DIR, static_url_path='/')
 CORS(app)
 
 # --------------------
@@ -19,10 +20,10 @@ CORS(app)
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
-    if path != "" and os.path.exists(app.static_folder + '/' + path):
+    target = os.path.join(DIST_DIR, path)
+    if path != "" and os.path.isfile(target):
         return app.send_static_file(path)
-    else:
-        return app.send_static_file('index.html')
+    return app.send_static_file('index.html')
 
 
 # --------------------
